@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <cstdio>
 #include <functional>
 #include <list>
@@ -190,6 +191,15 @@ public:
         ++inflight_;
         if (!waiting_[0].empty() || !waiting_[1].empty()) cv_.notify_all();   // the next in the queue may fit as well
     }
+    // Take a place only when a fixed-budget gate admits the module now. The offline pipeline checker uses this to put
+    // a waiting large module back and let another worker take a smaller one instead of blocking a worker at the gate.
+    bool try_enter(uint64_t estimate, Work work = Work::demand) {
+        std::lock_guard<std::mutex> g(mu_);
+        if (read_budget_ || !admits_locked(estimate, limit_for(work))) return false;
+        used_ += estimate;
+        ++inflight_;
+        return true;
+    }
     void leave(uint64_t estimate) {
         {
             std::lock_guard<std::mutex> g(mu_);
@@ -238,6 +248,8 @@ public:
         Ticket(LargeModuleGate& gate, uint64_t estimate, Work work = Work::demand) : gate_(&gate), estimate_(estimate) {
             gate.enter(estimate, work);
         }
+        Ticket(LargeModuleGate& gate, uint64_t estimate, std::try_to_lock_t, Work work = Work::demand)
+            : gate_(gate.try_enter(estimate, work) ? &gate : nullptr), estimate_(estimate) {}
         Ticket(Ticket&& o) noexcept : gate_(o.gate_), estimate_(o.estimate_) { o.gate_ = nullptr; }
         Ticket& operator=(Ticket&& o) noexcept {
             if (this != &o) { release(); gate_ = o.gate_; estimate_ = o.estimate_; o.gate_ = nullptr; }
@@ -246,6 +258,7 @@ public:
         Ticket(const Ticket&) = delete;
         Ticket& operator=(const Ticket&) = delete;
         ~Ticket() { release(); }
+        explicit operator bool() const { return gate_ != nullptr; }
         void release() {
             if (!gate_) return;
             gate_->leave(estimate_);
@@ -288,6 +301,50 @@ private:
     uint64_t used_ = 0;
     unsigned inflight_ = 0;
     unsigned demanded_ = 0;   // the Demands
+};
+
+// Hand out checker work without letting an over-budget large module occupy a worker while it waits for admission.
+class LargeModuleQueue {
+public:
+    struct Claim {
+        size_t index = 0;
+        LargeModuleGate::Ticket ticket;
+    };
+
+    LargeModuleQueue(LargeModuleGate& gate, size_t count) : gate_(gate), count_(count) {}
+
+    std::optional<Claim> take() {
+        std::lock_guard<std::mutex> g(mu_);
+        if (!waiting_.empty()) {
+            const auto [index, estimate] = waiting_.front();
+            LargeModuleGate::Ticket ticket(gate_, estimate, std::try_to_lock);
+            if (!ticket && next_ == count_) ticket = LargeModuleGate::Ticket(gate_, estimate);
+            if (ticket) {
+                waiting_.pop_front();
+                return Claim{index, std::move(ticket)};
+            }
+        }
+        if (next_ == count_) return std::nullopt;
+        return Claim{next_++, {}};
+    }
+
+    bool admit(Claim& claim, uint64_t estimate) {
+        if (claim.ticket) return true;
+        std::lock_guard<std::mutex> g(mu_);
+        if (waiting_.empty()) {
+            claim.ticket = LargeModuleGate::Ticket(gate_, estimate, std::try_to_lock);
+            if (claim.ticket) return true;
+        }
+        waiting_.emplace_back(claim.index, estimate);
+        return false;
+    }
+
+private:
+    LargeModuleGate& gate_;
+    const size_t count_;
+    std::mutex mu_;
+    size_t next_ = 0;
+    std::deque<std::pair<size_t, uint64_t>> waiting_;
 };
 
 }  // namespace leonida
