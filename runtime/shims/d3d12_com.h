@@ -623,6 +623,13 @@ D3D12_GPU_VIRTUAL_ADDRESS console_descriptor_table_va(D3D12_GPU_VIRTUAL_ADDRESS 
 // The console descriptor heap holding `va` (its console VA and bytes); false when none with a copy holds it.
 bool console_descriptor_heap_range(D3D12_GPU_VIRTUAL_ADDRESS va, std::uint64_t& console_va, std::uint64_t& bytes);
 
+// Packs the shader-visible bases of directly indexed descriptor heaps after a root signature's explicit arguments.
+// The bases must be converted to the arena VA that translated shaders dereference.
+void write_direct_heap_bases(const RootArgumentLayout& layout, std::uint32_t slot,
+                             D3D12_GPU_VIRTUAL_ADDRESS cbv_srv_uav_base,
+                             D3D12_GPU_VIRTUAL_ADDRESS sampler_base,
+                             std::array<std::uint32_t, rt::rootsig::kMaxUserSgprs>& data);
+
 // XDXR acceleration-structure commands (docs/d3d12_vulkan.md 4.8) of a list of `device`: every address the command
 // writes or reads, as the title named it, becomes the VA shaders reach that memory by (src/title_va_alias.h: a
 // slot-133 buffer's import or shadow, a window of the title's memory, a geometry copy), checked to hold every byte the

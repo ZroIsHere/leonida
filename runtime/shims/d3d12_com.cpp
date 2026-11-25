@@ -81,6 +81,17 @@ void stub(const char* method) {
     if (seen.insert(method).second) std::fprintf(stderr, "[rt] d3d12: unimplemented %s\n", method);
 }
 
+void write_direct_heap_bases(const RootArgumentLayout& layout, std::uint32_t slot,
+                             D3D12_GPU_VIRTUAL_ADDRESS cbv_srv_uav_base,
+                             D3D12_GPU_VIRTUAL_ADDRESS sampler_base,
+                             std::array<std::uint32_t, rt::rootsig::kMaxUserSgprs>& data) {
+    const auto flags = layout.flags;
+    if ((flags & D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED) && slot < data.size())
+        data[slot++] = static_cast<std::uint32_t>(console_descriptor_table_va(cbv_srv_uav_base));
+    if ((flags & D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED) && slot < data.size())
+        data[slot] = static_cast<std::uint32_t>(console_descriptor_table_va(sampler_base));
+}
+
 namespace {
 
 // Reports a deliberate simplification once (unlike stub, which reports a method not implemented).
@@ -1884,15 +1895,7 @@ private:
     // so rebinding a heap cannot change a recorded draw or dispatch.
     void write_direct_heaps(const RootState& state, std::uint32_t slot,
                             std::array<std::uint32_t, rt::rootsig::kMaxUserSgprs>& data) const {
-        const auto flags = state.layout->flags;
-        if ((flags & D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED) && slot < data.size()) {
-            const D3D12_GPU_VIRTUAL_ADDRESS va = console_descriptor_table_va(cbv_srv_uav_base_);
-            data[slot++] = static_cast<std::uint32_t>(va);
-        }
-        if ((flags & D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED) && slot < data.size()) {
-            const D3D12_GPU_VIRTUAL_ADDRESS va = console_descriptor_table_va(sampler_base_);
-            data[slot] = static_cast<std::uint32_t>(va);
-        }
+        write_direct_heap_bases(*state.layout, slot, cbv_srv_uav_base_, sampler_base_, data);
     }
 
     std::array<std::uint32_t, rt::rootsig::kMaxUserSgprs> with_direct_heaps(const RootState& state,
