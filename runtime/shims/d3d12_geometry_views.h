@@ -189,6 +189,40 @@ class GeometryViews {
         }
         return it->second == SIZE_MAX ? nullptr : tile_scratch_.data() + it->second;
     }
+<<<<<<< HEAD
+=======
+    // A run of address-adjacent written tiles as one guarded copy, the way the Radeon runtime joins neighboring fetch
+    // ranges: the title writes across 64 KiB boundaries, so
+    // one copy of the run skips a readability probe and a guarded copy per boundary. The tiles' read offsets are
+    // recorded so the per-tile read_tile() below reuses them; a run it cannot read whole is read tile by tile instead.
+    template<class Copy>
+    bool read_run(std::size_t first, std::size_t last, Copy& copy) {
+        const std::size_t at = tile_scratch_.size();
+        const std::size_t bytes = (last - first) * tile_size;
+        tile_scratch_.resize(at + bytes);
+        if (copy(tile_scratch_.data() + at, reinterpret_cast<const std::uint8_t*>(written_vas_[first]), bytes) !=
+            GeometryCopy::copied) {
+            tile_scratch_.resize(at);
+            return false;
+        }
+        for (std::size_t i = first; i < last; ++i)
+            tile_reads_[written_vas_[i]] = at + (i - first) * tile_size;
+        return true;
+    }
+    // Whether any view over the run [first, last) wants a tile copy (not pinned, not whole, filled already): a run no
+    // view needs is not read.
+    bool run_needed(std::size_t first, std::size_t last) const {
+        for (std::size_t i = first; i < last; ++i) {
+            const auto tile = tiles_.find(written_vas_[i]);
+            if (tile == tiles_.end()) continue;
+            for (const auto id : tile->second.views) {
+                if (id >= marks_.size() || (marks_[id] & kPinned) || !views_[id].alive) continue;
+                if (views_[id].ready) return true;
+            }
+        }
+        return false;
+    }
+
     template<class Copy>
     void fill(View& v, Copy& copy) {
         const auto result = copy(v.dst, reinterpret_cast<const std::uint8_t*>(v.source), v.size);
@@ -544,6 +578,11 @@ public:
         // 30-80 ms). A view over a tile that cannot be guarded yet (retry) is left as it is this time; a view not
         // filled yet is filled whole, once.
         marks_.assign(views_.size(), 0);
+<<<<<<< HEAD
+=======
+        // Both lists are cleared here, at the start: if a read or a guarded copy below throws, the next refresh must
+        // not find addresses in written_vas_ whose tile set no longer holds.
+
         written_vas_.clear();
         // The pass over the watched tiles makes a VirtualQuery and a VirtualProtect for each written one (tens of
         // milliseconds to a few hundred under Wine). resolve() waits for mutex_, and a new V# resolved while a
