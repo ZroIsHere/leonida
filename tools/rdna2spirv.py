@@ -3243,15 +3243,20 @@ class Gen:
         return self.block_label
 
     def image_get_lod(self, a, mods):
-        """image_get_lod vD, vaddr, T#, S#: (clamped lod, unclamped lod) like OpImageQueryLod (2D, 2D array). For
-        arrays the query takes only the 2D coordinate; the layer doesn't affect the LOD."""
+        """image_get_lod vD, vaddr, T#, S#: (clamped lod, unclamped lod) like OpImageQueryLod (2D, 2D array,
+        cube). For arrays the query takes only the 2D coordinate; the layer doesn't affect the LOD. A cube is the
+        same 6-layer 2D-array view image_sample uses (cube_coords): the projected s and t are the texture
+        coordinates, and the 8 * slice + face word takes no part in the LOD."""
         dim = next((m for m in mods if m.startswith("dim:")), "dim:SQ_RSRC_IMG_2D")
-        if dim not in ("dim:SQ_RSRC_IMG_2D", "dim:SQ_RSRC_IMG_2D_ARRAY") or self.stage != "ps":
+        cube = dim == "dim:SQ_RSRC_IMG_CUBE"
+        if dim not in ("dim:SQ_RSRC_IMG_2D", "dim:SQ_RSRC_IMG_2D_ARRAY", "dim:SQ_RSRC_IMG_CUBE") or self.stage != "ps":
             raise Unsupported("image_get_lod form")
         a16 = "a16" in mods
         if a16 and ("tfe" in mods or "lwe" in mods):
             raise Unsupported("image_get_lod form")
-        arr = dim.endswith("_ARRAY")
+        if a16 and cube:
+            raise Unsupported("image_get_lod a16 cube")    # a16 packs the cube's three coordinates differently
+        arr = dim.endswith("_ARRAY") or cube
         if arr:
             self.uses_tex_array = True
         dm = next((m for m in mods if m.startswith("dmask:")), "dmask:0x3")
@@ -3275,6 +3280,17 @@ class Gen:
             packed = self.load_reg("vgpr", addr[0])
             uv = self.tmp()
             self.emit(f"{uv} = OpExtInst %v2float %glsl UnpackHalf2x16 {packed}")
+        elif cube:
+            if len(addr) < 3:
+                raise Unsupported("image_get_lod cube coords")
+            # The hardware cube s and t are sc, tc / |cubema| + 1.5, i.e. the 2D-array view's u and v plus
+            # one; the third word (8 * slice + face) takes no part in the LOD, so it is not read.
+            f = [self.tof(self.load_reg("vgpr", r)) for r in addr[:2]]
+            s, t = self.tmp(), self.tmp()
+            self.emit(f"{s} = OpFSub %float {f[0]} %f1")
+            self.emit(f"{t} = OpFSub %float {f[1]} %f1")
+            uv = self.tmp()
+            self.emit(f"{uv} = OpCompositeConstruct %v2float {s} {t}")
         else:
             f = [self.tof(self.load_reg("vgpr", r)) for r in addr[:2]]
             uv = self.tmp()
