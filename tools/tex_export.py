@@ -17,6 +17,7 @@ For each texture:
     R16G16B16A16_UNORM normalized to RGBA8; R16_FLOAT, R32_FLOAT and R16G16B16A16_FLOAT are clamped to [0, 1],
     NaN as 0).
     R9G9B9E5_SHAREDEXP previews are also supported and clamp RGB to [0, 1].
+    Packed B5G6R5_UNORM and B5G5R5A1_UNORM previews are supported as well.
     The rest (including BC6H) keep their
     DDS only and are counted as "png unsupported". A PNG that fails to decode or write is counted as
     "png error:<Type>" and its DDS stays; neither changes the exit code

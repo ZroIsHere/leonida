@@ -6,6 +6,7 @@ legacy 24-bit RGB layouts (BGR8/RGB8, e.g. the D3DFMT_R8G8B8 byte order),
 and block-compressed formats (BC1, BC2, BC3, BC4, BC5, BC7). DX10
 R8G8_TYPELESS and R8G8_UNORM preview as red and green channels.
 DX10 R8_TYPELESS and R8_UNORM preview as a red-only channel.
+DX10 B5G6R5_UNORM and B5G5R5A1_UNORM are also supported.
 
 BC7 covers all eight modes. Decoding DXGI 97/98/99 (typeless, UNORM, UNORM_SRGB)
 preserves the stored RGBA8 values. The reserved mode (no mode bit in the first
@@ -102,6 +103,8 @@ _DXGI_MAP: dict[int, str] = {
     61: "R8_UNORM",
     65: "A8_UNORM",
     67: "R9G9B9E5_FLOAT",
+    85: "B5G6R5_UNORM",
+    86: "B5G5R5A1_UNORM",
     70: "BC1",
     71: "BC1",
     72: "BC1",
@@ -383,6 +386,7 @@ _TEXEL_BYTES = {
     "R11G11B10_FLOAT": 4, "R9G9B9E5_FLOAT": 4,
     "BGR8": 3, "RGB8": 3, "RG8_UNORM": 2, "R16_UNORM": 2, "RGBA16_UNORM": 8, "RGBA16_SNORM": 8, "A8_UNORM": 1,
     "R8_UNORM": 1,
+    "B5G6R5_UNORM": 2, "B5G5R5A1_UNORM": 2,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -588,6 +592,32 @@ def _decode_uncompressed_24(
     out[1::4] = src[g_byte::3]
     out[2::4] = src[b_byte::3]
     out[3::4] = b"\xff" * pixel_count
+    return bytes(out)
+
+
+def _decode_packed_16(payload: memoryview, width: int, height: int, fmt: str, pitch: int) -> bytes:
+    """Decode DXGI B5G6R5_UNORM or B5G5R5A1_UNORM pixels to RGBA8."""
+    row_bytes = width * 2
+    pitch = pitch or row_bytes
+    if pitch < row_bytes:
+        raise DdsError(f"Invalid {fmt} row pitch: {pitch} bytes (need at least {row_bytes})")
+    expected = (height - 1) * pitch + row_bytes
+    if len(payload) < expected:
+        raise DdsError(f"Truncated {fmt} payload: {len(payload)} bytes (need {expected})")
+
+    out = bytearray(width * height * 4)
+    dst = 0
+    for start in range(0, height * pitch, pitch):
+        for (pixel,) in struct.iter_unpack("<H", payload[start:start + row_bytes]):
+            if fmt == "B5G6R5_UNORM":
+                r, g, b = (pixel >> 11) & 0x1F, (pixel >> 5) & 0x3F, pixel & 0x1F
+                out[dst:dst + 4] = bytes(((r << 3) | (r >> 2), (g << 2) | (g >> 4),
+                                          (b << 3) | (b >> 2), 255))
+            else:
+                r, g, b = (pixel >> 10) & 0x1F, (pixel >> 5) & 0x1F, pixel & 0x1F
+                out[dst:dst + 4] = bytes(((r << 3) | (r >> 2), (g << 3) | (g >> 2),
+                                          (b << 3) | (b >> 2), 255 if pixel & 0x8000 else 0))
+            dst += 4
     return bytes(out)
 
 
@@ -1358,6 +1388,8 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
         rgba = _decode_rgba16_unorm(payload, width, height, pitch)
     elif fmt == "RGBA16_SNORM":
         rgba = _decode_rgba16_snorm(payload, width, height, pitch)
+    elif fmt in ("B5G6R5_UNORM", "B5G5R5A1_UNORM"):
+        rgba = _decode_packed_16(payload, width, height, fmt, pitch)
     elif fmt in _HALF_FLOAT_LAYOUT:
         rgba = _decode_half_float(payload, width, height, fmt, pitch)
     elif fmt in _RGB24_LAYOUTS.values():
