@@ -65,6 +65,9 @@ def _validate_png(data: bytes) -> str | None:
     seen_plte = seen_idat = ended_idat = seen_iend = False
     inflater = None
     inflated = expected = 0
+    row_sizes = []
+    row_index = rows_left = row_left = 0
+    at_row_start = True
     channels_by_type = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
     depths_by_type = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8),
                       4: (8, 16), 6: (8, 16)}
@@ -90,8 +93,8 @@ def _validate_png(data: bytes) -> str | None:
             if kind != b"IHDR" or length != 13:
                 return "the PNG does not start with a valid IHDR chunk"
             width, height, bit_depth, colour_type, compression, filtering, interlace = struct.unpack(">IIBBBBB", payload)
-            if not width or not height:
-                return "the PNG dimensions are zero"
+            if not width or not height or width > 0x7FFFFFFF or height > 0x7FFFFFFF:
+                return "the PNG dimensions are outside the valid range"
             if colour_type not in depths_by_type or bit_depth not in depths_by_type[colour_type]:
                 return "the PNG has an invalid colour type or bit depth"
             if compression != 0 or filtering != 0 or interlace not in (0, 1):
@@ -102,7 +105,11 @@ def _validate_png(data: bytes) -> str | None:
                 pass_height = max(0, (height - y0 + dy - 1) // dy)
                 if pass_width and pass_height:
                     row_bytes = (pass_width * channels_by_type[colour_type] * bit_depth + 7) // 8
-                    expected += pass_height * (row_bytes + 1)
+                    row_size = row_bytes + 1
+                    row_sizes.append((row_size, pass_height))
+                    expected += pass_height * row_size
+            if row_sizes:
+                row_left, rows_left = row_sizes[0]
         elif kind == b"IHDR":
             return "the PNG has multiple IHDR chunks"
         elif kind == b"PLTE":
@@ -131,6 +138,32 @@ def _validate_png(data: bytes) -> str | None:
                 inflated += len(decoded)
                 if inflated > expected:
                     return "the PNG image data is longer than its dimensions allow"
+                position = 0
+                while position < len(decoded):
+                    while row_index < len(row_sizes) and rows_left == 0:
+                        row_index += 1
+                        if row_index < len(row_sizes):
+                            row_left, rows_left = row_sizes[row_index]
+                    if row_index == len(row_sizes):
+                        return "the PNG image data is longer than its dimensions allow"
+                    if at_row_start:
+                        if decoded[position] > 4:
+                            return "the PNG image uses an invalid row filter"
+                        at_row_start = False
+                    consumed = min(row_left, len(decoded) - position)
+                    position += consumed
+                    row_left -= consumed
+                    if row_left == 0:
+                        rows_left -= 1
+                        if rows_left:
+                            row_size, _ = row_sizes[row_index]
+                            row_left = row_size
+                            at_row_start = True
+                        else:
+                            row_index += 1
+                            if row_index < len(row_sizes):
+                                row_left, rows_left = row_sizes[row_index]
+                                at_row_start = True
                 if inflater.unused_data:
                     return "the PNG image data has trailing compressed bytes"
                 pending = inflater.unconsumed_tail
