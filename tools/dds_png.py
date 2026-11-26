@@ -5,6 +5,7 @@ Supports legacy and DX10 DDS headers across uncompressed 32-bit formats
 legacy 24-bit RGB layouts (BGR8/RGB8, e.g. the D3DFMT_R8G8B8 byte order),
 and block-compressed formats (BC1, BC2, BC3, BC4, BC5, BC7). DX10
 R8G8_TYPELESS and R8G8_UNORM preview as red and green channels.
+DX10 R8_TYPELESS and R8_UNORM preview as a red-only channel.
 
 BC7 covers all eight modes. Decoding DXGI 97/98/99 (typeless, UNORM, UNORM_SRGB)
 preserves the stored RGBA8 values. The reserved mode (no mode bit in the first
@@ -97,6 +98,8 @@ _DXGI_MAP: dict[int, str] = {
     13: "RGBA16_SNORM",
     48: "RG8_UNORM",
     49: "RG8_UNORM",
+    60: "R8_UNORM",
+    61: "R8_UNORM",
     65: "A8_UNORM",
     67: "R9G9B9E5_FLOAT",
     70: "BC1",
@@ -379,6 +382,7 @@ _TEXEL_BYTES = {
     "RGBA8": 4, "BGRA8": 4, "BGRX8": 4, "RGBX8": 4,
     "R11G11B10_FLOAT": 4, "R9G9B9E5_FLOAT": 4,
     "BGR8": 3, "RGB8": 3, "RG8_UNORM": 2, "R16_UNORM": 2, "RGBA16_UNORM": 8, "RGBA16_SNORM": 8, "A8_UNORM": 1,
+    "R8_UNORM": 1,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -1092,7 +1096,7 @@ def _decode_r9g9b9e5(payload: memoryview, width: int, height: int, pitch: int) -
 
 
 def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: int, fmt: str) -> bytes:
-    """Red-only R16_UNORM/R32_FLOAT and alpha-only A8_UNORM."""
+    """Red-only R8/R16_UNORM/R32_FLOAT and alpha-only A8_UNORM."""
     bpp = _TEXEL_BYTES[fmt]
     row_bytes = width * bpp
     pitch = pitch or row_bytes
@@ -1108,7 +1112,10 @@ def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: 
     dst = 0
     for start in range(0, height * pitch, pitch):
         row = payload[start:start + row_bytes]
-        if fmt == "R16_UNORM":
+        if fmt == "R8_UNORM":
+            rgba[dst:dst + 4 * width:4] = row
+            dst += 4 * width
+        elif fmt == "R16_UNORM":
             for (v,) in struct.iter_unpack("<H", row):
                 rgba[dst] = (v * 255 + 32767) // 65535
                 dst += 4
@@ -1377,6 +1384,8 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
     elif fmt == "R9G9B9E5_FLOAT":
         rgba = _decode_r9g9b9e5(payload, width, height, pitch)
     elif fmt in ("R16_UNORM", "R32_FLOAT", "A8_UNORM"):
+        rgba = _decode_single_channel(payload, width, height, pitch, fmt)
+    elif fmt == "R8_UNORM":
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
     elif fmt == "BC7":
         rgba = _decode_bc7(payload, 0, width, height)
