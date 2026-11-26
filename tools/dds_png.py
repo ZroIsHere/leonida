@@ -11,7 +11,8 @@ byte) decodes as transparent black. BC6H is not supported.
 DXT2, DXT4 and premultiplied DX10 images are converted to straight alpha for PNG.
 For tagged sRGB images, unpremultiplication and downscaling use linear light. The PNG stores sRGB bytes.
 
-DX10 R16_FLOAT (54), R32_FLOAT (41) and R16G16B16A16_FLOAT (10) are read as linear values and
+DX10 R16G16B16A16_UNORM (11) is normalized to RGBA8 with half-up rounding. R16_FLOAT (54),
+R32_FLOAT (41) and R16G16B16A16_FLOAT (10) are read as linear values and
 written like the UNORM formats, with no tone mapping or sRGB transfer: clamp to
 [0, 1], then round(v * 255) half up. +inf saturates to 255; -inf, negative values
 and NaN map to 0. The single-channel formats fill red, with green and blue 0 and alpha 255;
@@ -88,6 +89,7 @@ _DXGI_MAP: dict[int, str] = {
     26: "R11G11B10_FLOAT",
     41: "R32_FLOAT",
     56: "R16_UNORM",
+    11: "RGBA16_UNORM",
     65: "A8_UNORM",
     70: "BC1",
     71: "BC1",
@@ -367,7 +369,7 @@ class _Plane(NamedTuple):
 
 _TEXEL_BYTES = {
     "RGBA8": 4, "BGRA8": 4, "BGRX8": 4, "RGBX8": 4, "R11G11B10_FLOAT": 4,
-    "BGR8": 3, "RGB8": 3, "R16_UNORM": 2, "A8_UNORM": 1,
+    "BGR8": 3, "RGB8": 3, "R16_UNORM": 2, "RGBA16_UNORM": 8, "A8_UNORM": 1,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -1089,6 +1091,28 @@ def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: 
     return bytes(rgba)
 
 
+def _decode_rgba16_unorm(payload: memoryview, width: int, height: int, pitch: int) -> bytes:
+    """Decode DXGI R16G16B16A16_UNORM to RGBA8 with half-up normalization."""
+    row_bytes = width * 8
+    pitch = pitch or row_bytes
+    if pitch < row_bytes:
+        raise DdsError(f"Invalid RGBA16_UNORM row pitch: {pitch} bytes (need at least {row_bytes})")
+    expected = (height - 1) * pitch + row_bytes
+    if len(payload) < expected:
+        raise DdsError(f"Truncated RGBA16_UNORM payload: {len(payload)} bytes (need {expected})")
+
+    rgba = bytearray(width * height * 4)
+    dst = 0
+    for start in range(0, height * pitch, pitch):
+        for (r, g, b, a) in struct.iter_unpack("<4H", payload[start:start + row_bytes]):
+            rgba[dst:dst + 4] = bytes(((r * 255 + 32767) // 65535,
+                                      (g * 255 + 32767) // 65535,
+                                      (b * 255 + 32767) // 65535,
+                                      (a * 255 + 32767) // 65535))
+            dst += 4
+    return bytes(rgba)
+
+
 def _bc7_read_indices(bits: int, index_bits: int, is_anchor: tuple[int, ...]) -> tuple[list[int], int]:
     """Read 16 LSB-first pixel indices; anchor pixels omit their implicit zero MSB."""
     indices = []
@@ -1248,6 +1272,8 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
 
     if fmt in ("RGBA8", "BGRA8", "BGRX8", "RGBX8"):
         rgba = _decode_uncompressed_32(payload, width, height, fmt, masks, pitch)
+    elif fmt == "RGBA16_UNORM":
+        rgba = _decode_rgba16_unorm(payload, width, height, pitch)
     elif fmt in _HALF_FLOAT_LAYOUT:
         rgba = _decode_half_float(payload, width, height, fmt, pitch)
     elif fmt in _RGB24_LAYOUTS.values():
