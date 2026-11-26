@@ -21,8 +21,8 @@ written like the UNORM formats, with no tone mapping or sRGB transfer: clamp to
 [0, 1], then round(v * 255) half up. +inf saturates to 255; -inf, negative values
 and NaN map to 0. The single-channel formats fill red, with green and blue 0 and alpha 255;
 R16G16B16A16_FLOAT keeps its own alpha.
-R16G16B16A16_SNORM (13) maps its signed normalized channels from [-1, 1] to [0, 255],
-with both -32768 and -32767 representing -1.0.
+R8_UINT previews preserve the byte value; R8_SINT maps its signed byte range to [0, 255].
+R16G16B16A16_SNORM (13) maps signed normalized channels from [-1, 1] to [0, 255].
 R11G11B10_FLOAT previews clamp RGB to [0, 1], map NaN to zero and use opaque alpha.
 R9G9B9E5_SHAREDEXP previews clamp RGB to [0, 1] and use opaque alpha.
 R8G8_SNORM previews map signed red and green values from [-1, 1] to [0, 255].
@@ -106,6 +106,8 @@ _DXGI_MAP: dict[int, str] = {
     60: "R8_UNORM",
     61: "R8_UNORM",
     51: "RG8_SNORM",
+    62: "R8_UINT",
+    64: "R8_SINT",
     65: "A8_UNORM",
     67: "R9G9B9E5_FLOAT",
     85: "B5G6R5_UNORM",
@@ -394,6 +396,7 @@ _TEXEL_BYTES = {
     "B5G6R5_UNORM": 2, "B5G5R5A1_UNORM": 2,
     "RG8_SNORM": 2,
     "RG8_UINT": 2, "RG8_SINT": 2,
+    "R8_UINT": 1, "R8_SINT": 1,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -1133,7 +1136,7 @@ def _decode_r9g9b9e5(payload: memoryview, width: int, height: int, pitch: int) -
 
 
 def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: int, fmt: str) -> bytes:
-    """Red-only R8/R16_UNORM/R32_FLOAT and alpha-only A8_UNORM."""
+    """Decode red-only numeric formats and alpha-only A8_UNORM."""
     bpp = _TEXEL_BYTES[fmt]
     row_bytes = width * bpp
     pitch = pitch or row_bytes
@@ -1149,7 +1152,14 @@ def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: 
     dst = 0
     for start in range(0, height * pitch, pitch):
         row = payload[start:start + row_bytes]
-        if fmt == "R8_UNORM":
+        if fmt == "R8_UINT":
+            rgba[dst:dst + 4 * width:4] = row
+            dst += 4 * width
+        elif fmt == "R8_SINT":
+            for (v,) in struct.iter_unpack("<b", row):
+                rgba[dst] = v + 128
+                dst += 4
+        elif fmt == "R8_UNORM":
             rgba[dst:dst + 4 * width:4] = row
             dst += 4 * width
         elif fmt == "R16_UNORM":
@@ -1468,6 +1478,7 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
     elif fmt in ("RG8_UINT", "RG8_SINT"):
         rgba = _decode_rg8_integer(payload, width, height, pitch, fmt)
     elif fmt in ("R16_UNORM", "R32_FLOAT", "A8_UNORM"):
+    elif fmt in ("R16_UNORM", "R8_UINT", "R8_SINT", "R32_FLOAT", "A8_UNORM"):
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
     elif fmt == "R8_UNORM":
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
