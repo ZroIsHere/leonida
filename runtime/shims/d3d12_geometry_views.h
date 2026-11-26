@@ -189,8 +189,6 @@ class GeometryViews {
         }
         return it->second == SIZE_MAX ? nullptr : tile_scratch_.data() + it->second;
     }
-<<<<<<< HEAD
-=======
     // A run of address-adjacent written tiles as one guarded copy, the way the Radeon runtime joins neighboring fetch
     // ranges: the title writes across 64 KiB boundaries, so
     // one copy of the run skips a readability probe and a guarded copy per boundary. The tiles' read offsets are
@@ -578,8 +576,6 @@ public:
         // 30-80 ms). A view over a tile that cannot be guarded yet (retry) is left as it is this time; a view not
         // filled yet is filled whole, once.
         marks_.assign(views_.size(), 0);
-<<<<<<< HEAD
-=======
         // Both lists are cleared here, at the start: if a read or a guarded copy below throws, the next refresh must
         // not find addresses in written_vas_ whose tile set no longer holds.
 
