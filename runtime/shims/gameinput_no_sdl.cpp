@@ -16,9 +16,9 @@
 //     title waits at its first "press A" prompt forever. The pad is an Xbox One gamepad that is connected from the
 //     first GameInputCreate on: device enumeration through RegisterDeviceCallback (blocking, async, and through a
 //     dispatcher), GetCurrentReading, GetNextReading and GetPreviousReading, and readings whose GetGamepadState and
-//     GetUiNavigationState follow the script. A reading is taken when the title asks for one, so no thread runs;
-//     reading callbacks, aggregate devices, rumble and every other device still need SDL3. Controllers and the
-//     keyboard pad need SDL3 too.
+//     GetUiNavigationState follow the script. A clock thread advances the script every 8 ms and stores each state
+//     change so GetNextReading can observe edges while the title waits between reads; reading callbacks, aggregate
+//     devices, rumble and every other device still need SDL3. Controllers and the keyboard pad need SDL3 too.
 #include <windows.h>
 
 #include <algorithm>
@@ -101,6 +101,8 @@ constexpr uint32_t kAxisCount = 6;     // LX, LY, RX, RY, LT, RT, as the SDL3 sh
 constexpr uint32_t kButtonCount = 15;  // SDL's standard gamepad buttons, numbered as the script's Button::sdl
 constexpr size_t kHistoryCap = 64;     // readings kept for GetNextReading/GetPreviousReading; one per change
 constexpr char kPadName[] = "Scripted pad (Leonida)";
+std::atomic<bool> g_trace_readings{false};
+std::atomic<uint64_t> g_gamepad_state_queries{0};
 
 uint64_t qpc_now_us() {
     static const LARGE_INTEGER freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
@@ -151,7 +153,14 @@ public:
         return r;
     }
 
-    uint32_t STDMETHODCALLTYPE GetInputKind() override { return kKinds; }
+    uint32_t STDMETHODCALLTYPE GetInputKind() override {
+        static std::atomic<uint64_t> queries{0};
+        const uint64_t query = queries.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_trace_readings.load(std::memory_order_relaxed) && query <= 8)
+            std::fprintf(stderr, "[rt] gameinput: GetInputKind #%llu seq=%llu kinds=0x%08x\n",
+                         static_cast<unsigned long long>(query), static_cast<unsigned long long>(seq_), kKinds);
+        return kKinds;
+    }
     uint64_t STDMETHODCALLTYPE GetSequenceNumber(uint32_t) override { return seq_; }
     uint64_t STDMETHODCALLTYPE GetTimestamp() override { return ts_; }
     void STDMETHODCALLTYPE GetDevice(IGameInputDevice** device) override;
@@ -168,6 +177,11 @@ public:
                                         state_.leftTrigger, state_.rightTrigger};
         const uint32_t n = std::min(count, kAxisCount);
         std::memcpy(out, axes, n * sizeof(float));
+        static std::atomic<uint64_t> queries{0};
+        const uint64_t query = queries.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_trace_readings.load(std::memory_order_relaxed) && query <= 8)
+            std::fprintf(stderr, "[rt] gameinput: GetControllerAxisState #%llu seq=%llu count=%u returned=%u\n",
+                         static_cast<unsigned long long>(query), static_cast<unsigned long long>(seq_), count, n);
         return n;
     }
     uint32_t STDMETHODCALLTYPE GetControllerButtonCount() override { return kButtonCount; }
@@ -177,6 +191,12 @@ public:
         for (const script::Button& b : script::kButtons) buttons[b.sdl] = (state_.buttons & b.bit) != 0;
         const uint32_t n = std::min(count, kButtonCount);
         std::memcpy(out, buttons, n * sizeof(bool));
+        static std::atomic<uint64_t> queries{0};
+        const uint64_t query = queries.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_trace_readings.load(std::memory_order_relaxed) && query <= 8)
+            std::fprintf(stderr, "[rt] gameinput: GetControllerButtonState #%llu seq=%llu count=%u returned=%u buttons=0x%08x\n",
+                         static_cast<unsigned long long>(query), static_cast<unsigned long long>(seq_), count, n,
+                         state_.buttons);
         return n;
     }
     uint32_t STDMETHODCALLTYPE GetControllerSwitchCount() override { return 0; }
@@ -192,12 +212,21 @@ public:
     bool STDMETHODCALLTYPE GetGamepadState(GameInputGamepadState* state) override {
         if (!state) return false;
         *state = state_;
+        const uint64_t query = g_gamepad_state_queries.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_trace_readings.load(std::memory_order_relaxed) && (query == 1 || state_.buttons || query % 1000 == 0))
+            std::fprintf(stderr, "[rt] gameinput: GetGamepadState #%llu seq=%llu buttons=0x%08x\n",
+                         static_cast<unsigned long long>(query), static_cast<unsigned long long>(seq_), state_.buttons);
         return true;
     }
     bool STDMETHODCALLTYPE GetRacingWheelState(void*) override { return false; }
     bool STDMETHODCALLTYPE GetUiNavigationState(GameInputUiNavigationState* state) override {
         if (!state) return false;
         state->buttons = script::ui_navigation(state_);
+        static std::atomic<uint64_t> queries{0};
+        const uint64_t query = queries.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_trace_readings.load(std::memory_order_relaxed) && query <= 8)
+            std::fprintf(stderr, "[rt] gameinput: GetUiNavigationState #%llu seq=%llu buttons=0x%08x\n",
+                         static_cast<unsigned long long>(query), static_cast<unsigned long long>(seq_), state->buttons);
         return true;
     }
 
@@ -278,7 +307,13 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override { return release_floor(refs_); }
 
-    const GameInputDeviceInfo* STDMETHODCALLTYPE GetDeviceInfo() override { return &info_; }
+    const GameInputDeviceInfo* STDMETHODCALLTYPE GetDeviceInfo() override {
+        static std::atomic<bool> logged{false};
+        if (g_trace_readings.load(std::memory_order_relaxed) && !logged.exchange(true, std::memory_order_relaxed))
+            std::fprintf(stderr, "[rt] gameinput: GetDeviceInfo family=%d input=0x%08x status=0x%08x\n",
+                         info_.deviceFamily, info_.supportedInput, kConnectedStatus);
+        return &info_;
+    }
     uint32_t STDMETHODCALLTYPE GetDeviceStatus() override { return kConnectedStatus; }
     void STDMETHODCALLTYPE GetBatteryState(GameInputBatteryState* state) override {
         if (state) *state = {0, 0, 0, 0, GameInputBatteryUnknown};
@@ -356,7 +391,9 @@ struct State {
     script::Script script;
     uint64_t origin_us = 0;      // the script's clock starts at the first GameInputCreate
     bool log_presses = true;     // LEONIDA_INPUT_LOG
+    bool trace_reads = false;    // LEONIDA_INPUT_TRACE
     uint32_t logged_held = 0;    // what log_scripted saw last
+    uint64_t reading_queries = 0;
     std::deque<Reading*> history;  // one reference each, oldest first; the newest is the current reading
     uint64_t evicted_seq = 0;      // sequence number of the newest reading dropped from history
     uint64_t seq = 0;
@@ -395,7 +432,19 @@ void update(uint64_t now) {
     }
 }
 
+void trace_reading(State& s, const char* api, uint32_t kind, const Reading* reading) {
+    const uint64_t query = ++s.reading_queries;
+    const uint32_t buttons = reading ? reading->state().buttons : 0;
+    if (s.trace_reads && (query == 1 || buttons || query % 1000 == 0))
+        std::fprintf(stderr, "[rt] gameinput: %s #%llu kind=0x%08x seq=%llu buttons=0x%08x\n", api,
+                     static_cast<unsigned long long>(query), kind,
+                     static_cast<unsigned long long>(reading ? reading->seq() : 0), buttons);
+}
+
 void call_device(const Callback& c, uint64_t timestamp) {
+    if (g().trace_reads)
+        std::fprintf(stderr, "[rt] gameinput: device callback token=%llu timestamp=%llu status=0x%08x\n",
+                     static_cast<unsigned long long>(c.token), static_cast<unsigned long long>(timestamp), kConnectedStatus);
     reinterpret_cast<GameInputDeviceCallback>(c.fn)(c.token, c.context, &pad(), timestamp, kConnectedStatus,
                                                     GameInputDeviceNoStatus);
 }
@@ -504,6 +553,8 @@ HRESULT find_reading(IGameInputReading* ref, uint32_t kind, IGameInputReading** 
     std::lock_guard lock(s.mu);
     update(now_us());
     const uint64_t r = static_cast<Reading*>(ref)->seq();
+    trace_reading(s, forward ? "GetNextReading" : "GetPreviousReading", kind,
+                  s.history.empty() ? nullptr : s.history.back());
     if (forward ? s.evicted_seq > r : s.evicted_seq >= r) return GAMEINPUT_E_REFERENCE_READING_TOO_OLD;
     Reading* best = nullptr;
     for (Reading* c : s.history) {
@@ -547,6 +598,7 @@ public:
         std::lock_guard lock(s.mu);
         update(now_us());
         Reading* r = s.history.back();
+        trace_reading(s, "GetCurrentReading", kind, r);
         r->AddRef();
         *out = r;
         return S_OK;
@@ -595,6 +647,10 @@ public:
                 later = true;
             }
         }
+        if (s.trace_reads)
+            std::fprintf(stderr,
+                         "[rt] gameinput: RegisterDeviceCallback kind=0x%08x filter=0x%08x enumeration=%d report=%d\n",
+                         kind, status_filter, static_cast<int>(enumeration), report ? 1 : 0);
         if (token) *token = c.token;
         // Blocking enumeration: the pad is reported before this returns, on the caller's thread.
         if (report && enumeration == GameInputBlockingEnumeration) call_device(c, now_us());
@@ -683,9 +739,25 @@ ScriptedInput* scripted() {
         std::lock_guard lock(s.mu);
         s.script = script::parse(text);
         s.log_presses = script::env_lower("LEONIDA_INPUT_LOG") != "0";
+        s.trace_reads = script::env_lower("LEONIDA_INPUT_TRACE") == "1";
+        g_trace_readings = s.trace_reads;
         s.wait_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         s.origin_us = now_us();
         update(s.origin_us);  // the first reading: nothing held unless the script presses at 0 s
+        // Advance timed presses even when the title is waiting between GameInput queries. Keep each edge in the
+        // reading history so GetNextReading can observe it; GetCurrentReading still returns the state at query time.
+        try {
+            std::thread([] {
+                for (;;) {
+                    Sleep(8);
+                    State& state = g();
+                    std::lock_guard lock(state.mu);
+                    update(now_us());
+                }
+            }).detach();
+        } catch (...) {
+            std::fprintf(stderr, "[rt] gameinput: could not start the scripted input clock; updates will follow title reads\n");
+        }
         std::fprintf(stderr,
                      "[rt] gameinput: served without SDL3: one scripted pad for LEONIDA_INPUT_SCRIPT (%zu scripted "
                      "press(es), %zu rejected); controllers and the keyboard pad need SDL3\n",

@@ -55,8 +55,9 @@ scripted pad, driven by the script alone:
   shim, or through `IGameInputDispatcher::Dispatch` once the title made a dispatcher) and found by `FindDeviceFromId`.
   It is already connected, so a callback registered without enumeration hears nothing.
 - **The readings:** `GetCurrentReading`, `GetNextReading` and `GetPreviousReading`, with gamepad, UI navigation,
-  controller axis and controller button state. A reading is taken when the title asks for one and the script's state
-  has changed since the last, so no thread polls; the history keeps the last 64 readings.
+  controller axis and controller button state. A clock thread advances the script every 8 ms and stores each state
+  change so `GetNextReading` can observe edges while the title waits between reads; the history keeps the last 64
+  readings.
 - **The timeline:** the same as with SDL3 (`runtime/shims/gameinput_script.h` holds the parser, the timeline and the
   log lines for both): seconds from the first `GameInputCreate`, each press held 300 ms (or its own `:hold`, see
   `LEONIDA_INPUT_SCRIPT` below), then released.
