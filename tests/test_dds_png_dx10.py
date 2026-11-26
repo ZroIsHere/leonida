@@ -87,6 +87,15 @@ class SingleChannelTests(unittest.TestCase):
         self.assertEqual(dds.decode_dds(data)[2], bytes((64, 191, 0, 255, 128, 128, 128, 128)))
         with self.assertRaises(dds.DdsError):
             dds.decode_dds(_dx10(1, 1, 13, bytes(7)))
+    def test_rgba16_unorm_normalizes_all_channels_with_row_padding(self):
+        payload = struct.pack("<4H", 0, 65535, 32768, 257) + b"pad!"
+        payload += struct.pack("<4H", 65535, 0, 32767, 32768)
+        data = _dx10(1, 2, 11, payload, pitch=12)
+        self.assertEqual(dds.parse_dds_header(data)["format"], "RGBA16_UNORM")
+        self.assertEqual(dds.decode_dds(data)[2], bytes((
+            0, 255, 128, 1,
+            255, 0, 127, 128,
+        )))
 
     def test_truncated_rejected(self):
         for dxgi, n in ((56, 7), (65, 3), (41, 15)):
