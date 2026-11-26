@@ -70,13 +70,29 @@ ORDER_KEYS = {
 
 # ---- plain Python: geometry, order, alignment, fit ------------------------------------------------------------
 
+def _finite_float(value, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a number, not bool")
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be a number") from exc
+    if not math.isfinite(num):
+        raise ValueError(f"{label} must be finite")
+    return num
+
+
+def _whole_number(value, label: str) -> int:
+    num = _finite_float(value, label)
+    if not num.is_integer():
+        raise ValueError(f"{label} ({value}) is not a whole number")
+    return int(num)
+
+
 def geometry(doc: dict) -> dict:
     """Columns, rows and world box of a grid document; origin is the grid centre (docs/gamedata.md)."""
-    tile, width, height = (doc[k] for k in ("tileSize", "width", "height"))
-    if any(not float(v).is_integer() for v in (tile, width, height)):
-        raise ValueError(f"grid size {width}x{height} or tile {tile} is not a whole number")
-    tile, width, height = int(tile), int(width), int(height)
-    if tile <= 0 or width % tile or height % tile:
+    tile, width, height = (_whole_number(doc[k], k) for k in ("tileSize", "width", "height"))
+    if tile <= 0 or width <= 0 or height <= 0 or width % tile or height % tile:
         raise ValueError(f"grid {width}x{height} is not a whole number of {tile}-unit tiles")
     ox, oy, oz = (float(v) for v in doc["origin"])
     z = float(doc.get("zInflation", 0.0))
