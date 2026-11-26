@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../shims/shims.h"
+#include "../shims/process_shim.h"
 #include "../shims/startup_trace.h"
 #include "base_reservation.h"
 #include "clzero_patch.h"
@@ -1197,6 +1198,15 @@ void __cdecl on_host_thread_event(DWORD reason) {
                 } catch (const std::exception& e) {
                     std::fprintf(stderr, "[rt] loader: thread detach, slot %zu (%s): %s\n", i, m->name.c_str(),
                                  e.what());
+                }
+                if (i == kMainImageSlot) {
+                    try {
+                        process::run_thread_local_exe_atexit_callback();
+                    } catch (const std::exception& e) {
+                        std::fprintf(stderr, "[rt] loader: executable thread-local destructors: %s\n", e.what());
+                    } catch (...) {
+                        std::fprintf(stderr, "[rt] loader: executable thread-local destructors threw an unknown exception\n");
+                    }
                 }
                 // Released even when the callbacks threw: a leaked block would be handed to the OS loader as the
                 // helper's own TLS block and freed with it at thread exit.
