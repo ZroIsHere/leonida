@@ -103,6 +103,26 @@ def host_allowed(host: str | None) -> bool:
     return name in _LOOPBACK_HOSTS
 
 
+def dds_sibling(path: str, base_dir: str) -> str | None:
+    """Find a case-insensitive DDS sibling, resolving it through safe_subpath before serving it."""
+    folder, name = os.path.split(path)
+    try:
+        entries = sorted(os.listdir(folder))
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.lower() == name.lower():
+            candidate = os.path.join(folder, entry)
+            try:
+                relative = os.path.relpath(candidate, os.path.realpath(base_dir))
+            except ValueError:
+                continue
+            safe_candidate = safe_subpath(base_dir, relative)
+            if safe_candidate is not None and os.path.isfile(safe_candidate):
+                return safe_candidate
+    return None
+
+
 def safe_subpath(base_dir: str, rel: str) -> str | None:
     """Resolve a relative URL path safely inside base_dir, or return None."""
     if not base_dir or not isinstance(rel, str) or not rel or "\x00" in rel:
@@ -217,6 +237,9 @@ class StudioHandler(http.server.BaseHTTPRequestHandler):
                 if dds_cand is None:
                     self.send_error(403, "Forbidden")
                     return
+                if not os.path.isfile(dds_cand):
+                    # A texture named upper.DDS: on a case-sensitive filesystem stem + ".dds" misses it.
+                    dds_cand = dds_sibling(dds_cand, self.textures_dir) or dds_cand
                 if os.path.isfile(dds_cand) and dds_png:
                     try:
                         png_bytes = dds_png.dds_file_to_png_bytes(dds_cand, max_size=1024)

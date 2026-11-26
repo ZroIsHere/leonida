@@ -519,14 +519,25 @@ class TestGalleryServer(unittest.TestCase):
                 self.assertNotIn(secret, body)
 
     def test_dds_symlink_escape_is_forbidden(self) -> None:
-        link = os.path.join(self.textures_dir, "escaped.dds")
+        outside = os.path.join(self.tmp.name, "outside.dds")
+        with open(outside, "wb") as f:
+            f.write(_make_1x1_rgba_dds())
+        links = {
+            "escaped.dds": 403,
+            # The case-insensitive preview fallback must validate the sibling it discovers too.
+            "escaped_upper.DDS": 404,
+        }
         try:
-            os.symlink(os.path.join(self.tmp.name, "outside.dds"), link)
+            for name in links:
+                os.symlink(outside, os.path.join(self.textures_dir, name))
         except (OSError, NotImplementedError) as exc:
             self.skipTest(f"cannot create symlink here: {exc}")
-        status, _, body = _raw_get(self.port, "/textures/escaped.png", host=f"127.0.0.1:{self.port}")
-        self.assertEqual(status, 403)
-        self.assertNotIn(b"\x89PNG", body)
+        for name, expected_status in links.items():
+            target = f"/textures/{os.path.splitext(name)[0]}.png"
+            with self.subTest(name=name):
+                status, _, body = _raw_get(self.port, target, host=f"127.0.0.1:{self.port}")
+                self.assertEqual(status, expected_status)
+                self.assertNotIn(b"\x89PNG", body)
 
     _GUARDED_TARGETS = ("/", "/api/models", "/api/textures", "/models/test_car.glb", "/textures/test_tex.png")
 
