@@ -9,9 +9,9 @@
 // triangle pass-through Geometry SPIR-V module (`tools/bary_fallback_gs.py` equivalent) in memory for the exact
 // `(VS, PS)` pair:
 //   - copies `BuiltIn Position` across the triangle's 3 vertices (`Triangles` -> `OutputTriangleStrip`, 3 vertices);
-//   - copies every `vec4<f32>` `Location` input the PS reads (other than `bary_location`) that the VS exports, and
-//     zero-fills any declared PS `Location` input the VS omits without declaring a dangling GS `Input` (preserving
-//     `VUID-RuntimeSpirv-OpEntryPoint-08743` on both `VS -> GS` and `GS -> PS` interfaces);
+//   - copies each statically read `vec4<f32>` `Location` input the PS reads (other than `bary_location`) that the VS
+//     exports; declared but unused PS inputs are zero-filled so they keep a matching GS output without consuming GS
+//     input components. Inputs the VS omits are also zero-filled (preserving the stage interface);
 //   - forwards a VS `BuiltIn ClipDistance` or `BuiltIn CullDistance` `float[1..8]` array when present (rejecting
 //     mixed clip+cull and `ShaderLayer` / `ShaderViewportIndex`, which a pass-through helper cannot forward);
 //   - writes `(1, 0, 0)`, `(0, 1, 0)`, `(0, 0, 1)` at `bary_location` so perspective interpolation yields
@@ -55,6 +55,9 @@ inline bool build_bary_fallback_gs(std::span<const std::uint32_t> vs_words,
     constexpr std::uint16_t kOpTypeFunction = 33;
     constexpr std::uint16_t kOpConstant = 43;
     constexpr std::uint16_t kOpConstantComposite = 44;
+    constexpr std::uint16_t kOpCopyObject = 83;
+    constexpr std::uint16_t kOpPtrAccessChain = 67;
+    constexpr std::uint16_t kOpInBoundsPtrAccessChain = 70;
     constexpr std::uint16_t kOpEmitVertex = 218;
     constexpr std::uint16_t kOpEndPrimitive = 219;
     constexpr std::uint16_t kOpLabel = 248;
@@ -192,6 +195,7 @@ inline bool build_bary_fallback_gs(std::span<const std::uint32_t> vs_words,
     std::set<std::uint32_t> ps_v4float_tys;
     std::map<std::uint32_t, std::uint32_t> ps_ptr_in_pointee;
     std::map<std::uint32_t, std::uint32_t> ps_in_var_pointee;
+    std::map<std::uint32_t, std::uint32_t> ps_in_var_by_loc;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> ps_loc_decs;
     std::set<std::uint32_t> ps_component_targets;
 
@@ -224,6 +228,43 @@ inline bool build_bary_fallback_gs(std::span<const std::uint32_t> vs_words,
             return fail("bary_fallback: Component-decorated PS Input at Location " + std::to_string(loc));
         if (!ps_in_loc_pointee.emplace(loc, it->second).second)
             return fail("bary_fallback: duplicate PS Input Location " + std::to_string(loc));
+        ps_in_var_by_loc.emplace(loc, target);
+    }
+
+    // The translator declares every interpolant in the FSSM table, including inputs the PS never reads. They still
+    // need matching GS outputs, but making the GS read all of them from the VS exceeds maxGeometryInputComponents on
+    // devices such as RADV which reports 64. Track pointer chains rooted at PS Input variables and mark only values
+    // actually loaded by the PS entry point; unused locations are supplied as zero by the GS below.
+    std::map<std::uint32_t, std::uint32_t> input_pointer_roots;
+    for (const auto& [var, _] : ps_in_var_pointee) input_pointer_roots.emplace(var, var);
+    bool in_ps_function = false;
+    bool roots_changed = true;
+    while (roots_changed) {
+        roots_changed = false;
+        in_ps_function = false;
+        for (const Inst& inst : ps_mod.insts) {
+            if (inst.opcode == kOpFunction) in_ps_function = true;
+            if (!in_ps_function) continue;
+            if ((inst.opcode == kOpAccessChain || inst.opcode == kOpInBoundsAccessChain ||
+                 inst.opcode == kOpPtrAccessChain || inst.opcode == kOpInBoundsPtrAccessChain) &&
+                inst.words.size() >= 4) {
+                const auto root = input_pointer_roots.find(inst.words[3]);
+                if (root != input_pointer_roots.end())
+                    roots_changed |= input_pointer_roots.emplace(inst.words[2], root->second).second;
+            } else if (inst.opcode == kOpCopyObject && inst.words.size() >= 4) {
+                const auto root = input_pointer_roots.find(inst.words[3]);
+                if (root != input_pointer_roots.end())
+                    roots_changed |= input_pointer_roots.emplace(inst.words[2], root->second).second;
+            }
+        }
+    }
+    std::set<std::uint32_t> statically_read_ps_inputs;
+    in_ps_function = false;
+    for (const Inst& inst : ps_mod.insts) {
+        if (inst.opcode == kOpFunction) in_ps_function = true;
+        if (!in_ps_function || inst.opcode != kOpLoad || inst.words.size() < 4) continue;
+        if (const auto root = input_pointer_roots.find(inst.words[3]); root != input_pointer_roots.end())
+            statically_read_ps_inputs.insert(root->second);
     }
 
     if (const auto bary_it = ps_in_loc_pointee.find(bary_location);
@@ -240,6 +281,10 @@ inline bool build_bary_fallback_gs(std::span<const std::uint32_t> vs_words,
         if (!ps_v4float_tys.count(pt_ty))
             return fail("bary_fallback: PS pass-through Input at Location " + std::to_string(loc) + " is not vec4<f32>");
         pass_locs.push_back(loc);
+        if (!statically_read_ps_inputs.count(ps_in_var_by_loc.at(loc))) {
+            zero_loc_set.insert(loc);
+            continue;
+        }
         const auto vs_it = vs_out_loc_pointee.find(loc);
         if (vs_it != vs_out_loc_pointee.end()) {
             if (!vs_v4float_tys.count(vs_it->second))
