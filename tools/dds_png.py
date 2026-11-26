@@ -17,6 +17,7 @@ written like the UNORM formats, with no tone mapping or sRGB transfer: clamp to
 and NaN map to 0. The single-channel formats fill red, with green and blue 0 and alpha 255;
 R16G16B16A16_FLOAT keeps its own alpha.
 R8_UINT previews preserve the byte value; R8_SINT maps its signed byte range to [0, 255].
+R8_SNORM previews map the signed value range [-1, 1] to [0, 255] in red, with opaque alpha.
 R11G11B10_FLOAT previews clamp RGB to [0, 1], map NaN to zero and use opaque alpha.
 
 Usage:
@@ -90,6 +91,7 @@ _DXGI_MAP: dict[int, str] = {
     41: "R32_FLOAT",
     56: "R16_UNORM",
     62: "R8_UINT",
+    63: "R8_SNORM",
     64: "R8_SINT",
     65: "A8_UNORM",
     70: "BC1",
@@ -370,7 +372,7 @@ class _Plane(NamedTuple):
 
 _TEXEL_BYTES = {
     "RGBA8": 4, "BGRA8": 4, "BGRX8": 4, "RGBX8": 4, "R11G11B10_FLOAT": 4,
-    "BGR8": 3, "RGB8": 3, "R16_UNORM": 2, "R8_UINT": 1, "R8_SINT": 1, "A8_UNORM": 1,
+    "BGR8": 3, "RGB8": 3, "R16_UNORM": 2, "R8_UINT": 1, "R8_SINT": 1, "R8_SNORM": 1, "A8_UNORM": 1,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -1082,6 +1084,10 @@ def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: 
             for (v,) in struct.iter_unpack("<b", row):
                 rgba[dst] = v + 128
                 dst += 4
+        elif fmt == "R8_SNORM":
+            for (v,) in struct.iter_unpack("<b", row):
+                rgba[dst] = int(round((max(-127, v) / 127.0 * 0.5 + 0.5) * 255.0))
+                dst += 4
         elif fmt == "R16_UNORM":
             for (v,) in struct.iter_unpack("<H", row):
                 rgba[dst] = (v * 255 + 32767) // 65535
@@ -1279,7 +1285,7 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
         rgba = _decode_bc5(payload, 0, width, height, signed=True)
     elif fmt == "R11G11B10_FLOAT":
         rgba = _decode_r11g11b10(payload, width, height, pitch)
-    elif fmt in ("R16_UNORM", "R8_UINT", "R8_SINT", "R32_FLOAT", "A8_UNORM"):
+    elif fmt in ("R16_UNORM", "R8_UINT", "R8_SINT", "R8_SNORM", "R32_FLOAT", "A8_UNORM"):
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
     elif fmt == "BC7":
         rgba = _decode_bc7(payload, 0, width, height)
