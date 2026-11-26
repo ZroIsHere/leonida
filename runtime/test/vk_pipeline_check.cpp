@@ -30,6 +30,7 @@
 //   --cache-feedback  count each stage's successful pipelines by VkPipelineCreationFeedback: hits (VALID and
 //                 APPLICATION_PIPELINE_CACHE_HIT), no hit reported (VALID only) and unavailable (no VALID bit, or a
 //                 pre-1.3 device without VK_EXT_pipeline_creation_feedback). The three add up to the ok count.
+//   --no-pipeline-cache  pass VK_NULL_HANDLE to pipeline creation for an application-cache A/B run; cannot use cache.bin
 //   --nv-diagnostics  create the device with VK_NV_device_diagnostics_config and the flags the runtime's
 //                 LEONIDA_DEVICE_FAULT=1 / LEONIDA_AFTERMATH=1 use (shader debug info, resource tracking, automatic
 //                 checkpoints), to measure what that does to compile times and to cache hits
@@ -796,7 +797,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
             "usage: vk_pipeline_check <spirv dir> [cache.bin] [--jobs N] [--start I] [--count N] [--slow SEC] "
             "[--max-bytes N] [--large-module-bytes N] [--large-parallel N] [--stage all|cs|graphics | --compute-only | --graphics-only] "
-            "[--stats FILE] [--cache-feedback] [--isolate [--isolate-batch N]] [--inflight-file F] "
+            "[--stats FILE] [--cache-feedback] [--no-pipeline-cache] [--isolate [--isolate-batch N]] [--inflight-file F] "
             "[--skip-file F]\n");
         return 2;
     }
@@ -809,7 +810,7 @@ int main(int argc, char** argv) {
     unsigned large_parallel = 0;   // 0 = by the memory budget
     double slow = 30.0;
     std::string stage_filter = "all";
-    bool cache_feedback = false, isolate = false, iso_child = false, nv_diagnostics = false;
+    bool cache_feedback = false, no_pipeline_cache = false, isolate = false, iso_child = false, nv_diagnostics = false;
     size_t isolate_batch = 256;
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i];
@@ -853,6 +854,7 @@ int main(int argc, char** argv) {
         else if (a == "--inflight-file") valid = !(inflight_path = value()).empty();
         else if (a == "--skip-file") valid = !(skip_path = value()).empty();
         else if (a == "--cache-feedback") cache_feedback = true;
+        else if (a == "--no-pipeline-cache") no_pipeline_cache = true;
         else if (a == "--isolate") isolate = true;
         else if (a == "--nv-diagnostics") nv_diagnostics = true;
         else if (a == "--isolate-child") iso_child = true;   // internal: the parent's child runs
@@ -878,6 +880,11 @@ int main(int argc, char** argv) {
     }
     if (stage_filter != "all" && stage_filter != "cs" && stage_filter != "graphics") {
         std::fprintf(stderr, "unknown --stage '%s' (expected: all, cs, graphics)\n", stage_filter.c_str());
+        return 2;
+    }
+
+    if (no_pipeline_cache && cache_given) {
+        std::fprintf(stderr, "--no-pipeline-cache cannot be combined with cache.bin\n");
         return 2;
     }
 
@@ -956,6 +963,7 @@ int main(int argc, char** argv) {
                                          "--large-module-bytes", std::to_string(large_module_bytes),
                                          "--large-parallel", std::to_string(large_parallel)};
         if (cache_feedback) pass.push_back("--cache-feedback");
+        if (no_pipeline_cache) pass.push_back("--no-pipeline-cache");
         if (!inflight_path.empty()) pass.insert(pass.end(), {"--inflight-file", inflight_path});
         if (!skip_path.empty()) pass.insert(pass.end(), {"--skip-file", skip_path});
         struct Agg { uint32_t mod_ok = 0, mod_bad = 0, pipe_ok = 0, pipe_bad = 0, pipe_skip = 0, big = 0, crashed = 0, fb[3] = {}; };
@@ -1434,19 +1442,23 @@ int main(int argc, char** argv) {
     }
     VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     std::vector<char> seed;
-    if (!cache_path.empty()) {  // resume: pipelines already in the cache compile instantly
+    if (!no_pipeline_cache && !cache_path.empty()) {  // resume: pipelines already in the cache compile instantly
         std::ifstream cf(cache_path, std::ios::binary);
         seed.assign(std::istreambuf_iterator<char>(cf), {});
         if (!seed.empty()) std::fprintf(stderr, "seeded the pipeline cache with %zu bytes from %s\n", seed.size(), cache_path.c_str());
     }
     pci.initialDataSize = seed.size(); pci.pInitialData = seed.empty() ? nullptr : seed.data();
     VkPipelineCache cache = VK_NULL_HANDLE;
-    if (vkCreatePipelineCache(dev, &pci, nullptr, &cache)) {  // data from another driver: start empty
-        pci.initialDataSize = 0; pci.pInitialData = nullptr;
-        if (VkResult r = vkCreatePipelineCache(dev, &pci, nullptr, &cache)) {
-            std::fprintf(stderr, "vkCreatePipelineCache failed: %d\n", r);
-            return 1;
+    if (!no_pipeline_cache) {
+        if (vkCreatePipelineCache(dev, &pci, nullptr, &cache)) {  // data from another driver: start empty
+            pci.initialDataSize = 0; pci.pInitialData = nullptr;
+            if (VkResult r = vkCreatePipelineCache(dev, &pci, nullptr, &cache)) {
+                std::fprintf(stderr, "vkCreatePipelineCache failed: %d\n", r);
+                return 1;
+            }
         }
+    } else {
+        std::fprintf(stderr, "application pipeline cache: disabled (driver-internal caches may still be active)\n");
     }
     std::vector<char>().swap(seed);  // the driver has copied the seed; it can be several GiB
     auto save_cache = [&](bool final_save) {
