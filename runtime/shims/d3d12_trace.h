@@ -33,7 +33,15 @@ inline void record(const char* method, const char* outcome = "called") noexcept 
 }
 
 inline HRESULT result(const char* method, HRESULT code) noexcept {
-    record(method, code == E_NOTIMPL ? "unsupported" : FAILED(code) ? "failed" : "ok");
+    if (code == E_NOTIMPL) {
+        record(method, "unsupported");
+    } else if (FAILED(code)) {
+        char outcome[40]{};
+        std::snprintf(outcome, sizeof(outcome), "failed (hr=0x%08lx)", static_cast<unsigned long>(code));
+        record(method, outcome);
+    } else {
+        record(method, "ok");
+    }
     return code;
 }
 
