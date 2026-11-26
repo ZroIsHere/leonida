@@ -215,25 +215,56 @@ def inside(lo: float, hi: float, box_lo: float, box_hi: float) -> bool:
 
 # ---- inputs -----------------------------------------------------------------------------------------------------
 
+def _manifest_path_under(root: str, path: str, label: str) -> str:
+    """Resolve a manifest-derived path and require it to stay below its trusted root."""
+    real_root = os.path.realpath(root)
+    resolved = os.path.realpath(path)
+    try:
+        common = os.path.commonpath((real_root, resolved))
+    except ValueError as exc:
+        raise ValueError(f"{label} is outside its root") from exc
+    if os.path.normcase(common) != os.path.normcase(real_root):
+        raise ValueError(f"{label} is outside its root")
+    return resolved
+
+
 def load_manifests(work: str) -> list:
     """Every exported texture: dicts with archive, offset, dir, index, name, width, height, format, path."""
     assets = os.path.join(work, "assets")
     if not os.path.isdir(assets):
         raise ValueError(f"{work} has no assets folder (run make_game.py --stages assets)")
+    assets_root = os.path.realpath(assets)
     out = []
     for archive in sorted(os.listdir(assets)):
-        root = os.path.join(assets, archive, "textures")
-        path = os.path.join(root, "manifest.json")
+        root = _manifest_path_under(assets_root, os.path.join(assets, archive, "textures"),
+                                    "texture archive directory")
+        path = _manifest_path_under(root, os.path.join(root, "manifest.json"), "texture manifest path")
         if not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8-sig") as f:
             manifest = json.load(f)
-        for item in manifest.get("Items", []):
-            for t in item.get("Textures", []):
-                out.append({"archive": archive, "offset": int(item["Offset"]), "dir": item["Dir"],
-                            "index": int(t["Index"]), "name": t["Name"], "width": int(t["Width"]),
-                            "height": int(t["Height"]), "format": t["Format"],
-                            "path": os.path.join(root, item["Dir"], "%03d_%s.dds" % (t["Index"], t["Name"])),
+        if not isinstance(manifest, dict):
+            raise ValueError(f"{path}: expected JSON object")
+        items = manifest.get("Items", [])
+        if not isinstance(items, list):
+            raise ValueError(f"{path}: Items must be a list")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError(f"{path}: manifest item must be an object")
+            textures = item.get("Textures", [])
+            if not isinstance(textures, list):
+                raise ValueError(f"{path}: Textures must be a list")
+            for t in textures:
+                if not isinstance(t, dict):
+                    raise ValueError(f"{path}: texture record must be an object")
+                texture_path = os.path.join(root, item["Dir"],
+                                            "%03d_%s.dds" % (int(t["Index"]), t["Name"]))
+                texture_path = _manifest_path_under(root, texture_path, "manifest texture path")
+                out.append({"archive": archive, "offset": _whole_number(item["Offset"], "Offset"), "dir": item["Dir"],
+                            "index": _whole_number(t["Index"], "Index"), "name": t["Name"],
+                            "width": _whole_number(t["Width"], "Width"), "height": _whole_number(t["Height"], "Height"),
+                            "format": t["Format"],
+                            "path": texture_path,
                             "manifest": path})
     if not out:
         raise ValueError(f"no texture manifest under {assets}")
