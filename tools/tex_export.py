@@ -13,7 +13,8 @@ For each texture:
   - writes <out>/<archive>/<cpu blob>_<q index>_<WxH>_<format>.dds and records the choice in export_log.json,
     with "heuristic": true whenever two distinct placements fitted (the pick is a score, not a verified layout)
   - with --png, also writes the same path with .png for every texture tools/dds_png.py can decode (BC1-BC5, BC7
-    and 8-bit RGBA/BGRA, R8_UINT/SINT/SNORM, R10G10B10A2_TYPELESS/UNORM/UINT or R11G11B10_FLOAT, with no sRGB transfer;
+    and 8-bit RGBA/BGRA, R8_UINT/SINT/SNORM, R8G8_UINT/SINT, R10G10B10A2_TYPELESS/UNORM/UINT or R11G11B10_FLOAT,
+    with no sRGB transfer;
     BC5 blue is a reconstructed normal Z;
     R16_FLOAT, R32_FLOAT and R16G16B16A16_FLOAT clamped to [0, 1], NaN as 0).
     The rest (including BC6H) keep their
