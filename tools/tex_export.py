@@ -16,6 +16,7 @@ For each texture:
     and 8-bit RGBA/BGRA, R10G10B10A2_UNORM or R11G11B10_FLOAT, with no sRGB transfer; BC5 blue is a reconstructed normal Z;
     R16G16B16A16_UNORM normalized to RGBA8; R16_FLOAT, R32_FLOAT and R16G16B16A16_FLOAT are clamped to [0, 1],
     NaN as 0).
+    R9G9B9E5_SHAREDEXP previews are also supported and clamp RGB to [0, 1].
     The rest (including BC6H) keep their
     DDS only and are counted as "png unsupported". A PNG that fails to decode or write is counted as
     "png error:<Type>" and its DDS stays; neither changes the exit code
