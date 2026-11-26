@@ -580,9 +580,11 @@ The game's `atexit` handlers and static destructors go to a table of the run's o
 shared with gta6rt): `exit` and a return from `main` run them newest first before the run ends, `_cexit` runs them and
 returns, and `_exit`, `quick_exit`, `ExitProcess` and `abort` skip them, as natively. `run_tiny_atexit` runs a stand-in
 program natively and through `--run` for each of those paths (and for `_exit` from a second thread during `exit`) and
-holds both to the Windows sequence (under Wine, whose CRT differs, a native difference is only reported). Not covered
-yet: `at_quick_exit` handlers (`quick_exit` runs none) and the thread-local destructor callback
-(`_register_thread_local_exe_atexit_callback`); both still reach the host CRT.
+holds both to the Windows sequence (under Wine, whose CRT differs, a native difference is only reported). The
+executable's `_register_thread_local_exe_atexit_callback` is kept by the runtime and called on guest thread detach,
+after that thread's executable TLS callbacks. `exit` also runs it before the game thread parks for host shutdown;
+`_cexit`, `_exit`, `quick_exit`, `ExitProcess` and `abort` do not. `at_quick_exit` handlers are not covered (`quick_exit`
+runs none).
 `run_tiny_frame` does it with a stand-in that imports `d3d12_xs.dll!D3D12XboxCreateDevice` and, with
 `LEONIDA_D3D12=vulkan`, clears a render target and reads it back on the Vulkan device: the loader, the game thread,
 the Xbox-ABI proxies and the device in one process (`test/fixtures/tiny_frame.cpp`; `test/check_tiny_frame.py` checks

@@ -11,8 +11,7 @@
 //     shares with gta6rt. exit() runs it newest first, as the CRT does, before the run ends; _exit(), _Exit(),
 //     quick_exit(), ExitProcess() and abort() do not. _cexit() runs it and returns, _c_exit() returns. A second
 //     thread that calls exit(), _exit(), _Exit() or quick_exit() while the first is leaving waits, as with the
-//     CRT's exit lock. Not covered yet: at_quick_exit() handlers (quick_exit() runs none) and the thread-local
-//     destructor callback (_register_thread_local_exe_atexit_callback); both still reach the host CRT.
+//     CRT's exit lock. Not covered yet: at_quick_exit() handlers (quick_exit() runs none).
 // Covered CRTs: the Universal CRT (api-ms-win-crt-runtime-l1-1-0.dll / ucrtbase.dll, what MSVC links; ucrtbased.dll in Debug) and
 // msvcrt.dll (MinGW). Calls made inside host DLLs, not through the game's imports, are not seen here.
 // The loader matches imports by exact DLL name, so GetCommandLineA/W and ExitProcess are served under every name a
@@ -157,7 +156,10 @@ bool take_exit_lock() {
 }
 // exit(): the game's handlers and static destructors, then the end of the run.
 void __cdecl game_exit(int code) {
-    if (take_exit_lock()) run_atexit_handlers();
+    if (take_exit_lock()) {
+        run_atexit_handlers();
+        run_thread_local_exe_atexit_callback();
+    }
     end_run(code);
 }
 // _exit(), _Exit(), quick_exit(): the end of the run without the atexit handlers.
@@ -250,6 +252,10 @@ void __cdecl game_abort() {
         if (previous != SIG_DFL && previous != SIG_IGN) std::raise(SIGABRT);
     }
     end_run(3);  // the CRT's abort exit code
+}
+
+void __cdecl game_register_thread_local_exe_atexit_callback(ThreadLocalExeAtexitCallback callback) {
+    register_thread_local_exe_atexit_callback(callback);
 }
 
 // ---- arguments
@@ -415,6 +421,7 @@ DWORD WINAPI game_thread(void* p) {
     // An EXE entry point (mainCRTStartup and friends) takes the PEB pointer and returns the process exit code.
     auto entry = reinterpret_cast<DWORD(WINAPI*)(void*)>(call->entry);
     const DWORD code = entry(nullptr);
+    run_thread_local_exe_atexit_callback();
     end_run(static_cast<int>(code));  // returning from the entry point is an exit too
 }
 
@@ -493,6 +500,8 @@ using namespace rt::process;
     {dll, "_crt_atexit", reinterpret_cast<void*>(&game_crt_atexit)}, \
     {dll, "_cexit", reinterpret_cast<void*>(&game_cexit)}, {dll, "_c_exit", reinterpret_cast<void*>(&game_c_exit)}, \
     {dll, "abort", reinterpret_cast<void*>(&game_abort)}, {dll, "__p___argc", reinterpret_cast<void*>(&game_p_argc)}, \
+    {dll, "_register_thread_local_exe_atexit_callback", \
+     reinterpret_cast<void*>(&game_register_thread_local_exe_atexit_callback)}, \
     {dll, "__p___argv", reinterpret_cast<void*>(&game_p_argv)}, \
     {dll, "__p___wargv", reinterpret_cast<void*>(&game_p_wargv)}, \
     {dll, "_configure_narrow_argv", reinterpret_cast<void*>(&game_configure_narrow_argv)}, \
