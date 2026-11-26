@@ -113,10 +113,45 @@ def score_image(w, h, fmt, payload, bpe):
     return float(d / (a.std() + 1e-6))
 
 
+def _safe_relpath(value, field):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty relative path")
+    norm = value.replace("\\", "/")
+    if norm.startswith("/") or os.path.isabs(value) or os.path.splitdrive(value)[0]:
+        raise ValueError(f"{field} must not be an absolute path: {value!r}")
+    parts = [p for p in norm.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise ValueError(f"{field} escapes output root: {value!r}")
+    return os.path.join(*parts)
+
+
+def _safe_component(value, field):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty name")
+    if "/" in value or "\\" in value or value in (".", ".."):
+        raise ValueError(f"{field} must not contain path separators: {value!r}")
+    return value
+
+
+def _path_under_root(root, path, field):
+    """Resolve path and reject symlinks that lead outside the configured root."""
+    real_root = os.path.realpath(os.path.abspath(root))
+    real_path = os.path.realpath(os.path.abspath(path))
+    try:
+        common = os.path.commonpath((real_root, real_path))
+    except ValueError:  # different drives on Windows
+        common = ""
+    if os.path.normcase(common) != os.path.normcase(real_root):
+        raise ValueError(f"{field} resolves outside its root: {path!r}")
+    return real_path
+
+
 def export_one(t, carve, out, blob_cache, png=False):
     fmt = t["fmt"]
     if fmt not in FMT:
         return "unsupported format"
+    archive_rel = _safe_component(t["archive"], "archive")
+    fmt_name = _safe_component(t["fmt_name"], "format name")
     bpe, blk = FMT[fmt]
     w, h = t["w"], t["h"]
     we, he = (w + blk - 1) // blk, (h + blk - 1) // blk
@@ -126,7 +161,10 @@ def export_one(t, carve, out, blob_cache, png=False):
         blob_cache.clear()
         parts = []
         for off in chain_offs:
-            with open(os.path.join(carve, t["archive"], f"{off:012x}.bin"), "rb") as f:
+            blob_path = _path_under_root(
+                carve, os.path.join(carve, archive_rel, f"{off:012x}.bin"), "carve input"
+            )
+            with open(blob_path, "rb") as f:
                 parts.append(f.read())
         blob_cache[key] = b"".join(parts)
     G = blob_cache[key]
@@ -150,17 +188,26 @@ def export_one(t, carve, out, blob_cache, png=False):
         return "data outside GPU blob"
     cands.sort(key=lambda c: c[0])
     s, place, payload = cands[0]
-    name = f"{t['cpu']:012x}_{t['q_index']}_{w}x{h}_{t['fmt_name']}.dds"
-    d = os.path.join(out, t["archive"])
+    name = f"{t['cpu']:012x}_{t['q_index']}_{w}x{h}_{fmt_name}.dds"
+    d = _path_under_root(out, os.path.join(out, archive_rel), "export directory")
     os.makedirs(d, exist_ok=True)
+    d = _path_under_root(out, d, "export directory")
     dds = dds_bytes(w, h, fmt, payload)
-    with open(os.path.join(d, name), "wb") as f:
-        f.write(dds)
+    dds_path = _path_under_root(out, os.path.join(d, name), "DDS output")
+    try:
+        with open(dds_path, "wb") as f:
+            f.write(dds)
+    except OSError:
+        try:
+            os.remove(dds_path)
+        except OSError:
+            pass
+        raise
     # two placements that fit at different offsets leave the pick to the score, not to a known layout
     t["export"] = {"file": name, "place": place, "score": round(s, 4), "heuristic": len(cands) > 1 and chain > top}
     if png:
         import dds_png  # lazy: only --png pays for it
-        png_path = os.path.join(d, name[:-4] + ".png")
+        png_path = _path_under_root(out, os.path.join(d, name[:-4] + ".png"), "PNG output")
         try:
             data = dds_png.dds_to_png_bytes(dds)
             with open(png_path, "wb") as f:
@@ -217,7 +264,11 @@ def main():
     if os.path.exists(a.out) and not os.path.isdir(a.out):
         print(f"ERROR: {a.out} is a file, not a folder", file=sys.stderr)
         return 2
-    report = os.path.join(a.out, "export_log.json")
+    try:
+        report = _path_under_root(a.out, os.path.join(a.out, "export_log.json"), "export log")
+    except ValueError as e:
+        print(f"ERROR: cannot write export log: {e}", file=sys.stderr)
+        return 2
     if same_report_path(report, a.index):
         print(f"ERROR: {report} must not overwrite input index {a.index}", file=sys.stderr)
         return 2
@@ -243,7 +294,7 @@ def main():
             pngs[t["export"]["png"]] += 1
         if i % 2000 == 0:
             print(f"[{i}/{len(texs)}] {dict(res)}", flush=True)
-    report = os.path.join(a.out, "export_log.json")
+    report = _path_under_root(a.out, os.path.join(a.out, "export_log.json"), "export log")
     try:
         with open(report, "w", encoding="utf-8", newline="\n") as f:
             json.dump(texs, f)
