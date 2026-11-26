@@ -1,7 +1,7 @@
 """Pure standard-library DDS to PNG decoder and 2x box-filter downscaler.
 
 Supports legacy and DX10 DDS headers across uncompressed 32-bit formats
-(BGRA8, RGBA8, BGRX8, RGBX8, R10G10B10A2_UNORM and TYPELESS, and arbitrary 32-bit RGB/RGBA bitmasks), the
+(BGRA8, RGBA8, BGRX8, RGBX8, R10G10B10A2_UNORM/UINT/TYPELESS, and arbitrary 32-bit RGB/RGBA bitmasks), the
 legacy 24-bit RGB layouts (BGR8/RGB8, e.g. the D3DFMT_R8G8B8 byte order),
 and block-compressed formats (BC1, BC2, BC3, BC4, BC5, BC7). DX10
 R8G8_TYPELESS and R8G8_UNORM preview as red and green channels.
@@ -286,7 +286,7 @@ def _parse_header_internal(
                     f"Truncated DX10 DDS header: {len(data)} bytes (need at least {DDS_DX10_HEADER_SIZE})"
                 )
             dxgi_format = struct.unpack_from("<I", data, 128)[0]
-            if dxgi_format in (23, 24):  # Preview TYPELESS as UNORM; R occupies the low bits.
+            if dxgi_format in (23, 24, 25):  # Preview packed R10G10B10A2 variants as UNORM bytes.
                 fmt = "RGBA8"
                 masks = (0x000003FF, 0x000FFC00, 0x3FF00000, 0xC0000000)
             else:
