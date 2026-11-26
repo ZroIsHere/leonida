@@ -14,9 +14,9 @@ For each texture:
     with "heuristic": true whenever two distinct placements fitted (the pick is a score, not a verified layout)
   - with --png, also writes the same path with .png for every texture tools/dds_png.py can decode (BC1-BC5, BC7
     and 8-bit RGBA/BGRA, B5G6R5_UNORM, B5G5R5A1_UNORM, R8_UINT/SINT/SNORM, R8G8_UNORM/UINT/SINT/SNORM,
-    R10G10B10A2_TYPELESS/UNORM/UINT, R11G11B10_FLOAT or R9G9B9E5_SHAREDEXP, with no sRGB transfer;
-    BC5 blue is a reconstructed normal Z. R9G9B9E5_SHAREDEXP, R16_FLOAT, R32_FLOAT and R16G16B16A16_FLOAT
-    clamp to [0, 1], with NaN as 0 for formats that can encode it).
+    R10G10B10A2_TYPELESS/UNORM/UINT, R11G11B10_FLOAT, R9G9B9E5_SHAREDEXP,
+    R16G16B16A16_UNORM/SNORM, R16_FLOAT, R32_FLOAT and R16G16B16A16_FLOAT, with no sRGB transfer;
+    BC5 blue is a reconstructed normal Z; float formats clamp to [0, 1], with NaN as 0 where applicable).
     The rest (including BC6H) keep their
     DDS only and are counted as "png unsupported". A PNG that fails to decode or write is counted as
     "png error:<Type>" and its DDS stays; neither changes the exit code
