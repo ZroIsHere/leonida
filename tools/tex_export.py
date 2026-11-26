@@ -19,6 +19,7 @@ For each texture:
     R9G9B9E5_SHAREDEXP previews are also supported and clamp RGB to [0, 1].
     Packed B5G6R5_UNORM and B5G5R5A1_UNORM previews are supported as well.
     R8G8_SNORM previews are supported with signed red and green channels.
+    R8G8_UINT and R8G8_SINT previews are supported as unsigned or offset signed channels.
     The rest (including BC6H) keep their
     DDS only and are counted as "png unsupported". A PNG that fails to decode or write is counted as
     "png error:<Type>" and its DDS stays; neither changes the exit code

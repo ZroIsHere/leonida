@@ -101,6 +101,8 @@ _DXGI_MAP: dict[int, str] = {
     13: "RGBA16_SNORM",
     48: "RG8_UNORM",
     49: "RG8_UNORM",
+    50: "RG8_UINT",
+    52: "RG8_SINT",
     60: "R8_UNORM",
     61: "R8_UNORM",
     51: "RG8_SNORM",
@@ -391,6 +393,7 @@ _TEXEL_BYTES = {
     "R8_UNORM": 1,
     "B5G6R5_UNORM": 2, "B5G5R5A1_UNORM": 2,
     "RG8_SNORM": 2,
+    "RG8_UINT": 2, "RG8_SINT": 2,
     "R32_FLOAT": 4,
     **{fmt: layout[0] for fmt, layout in _HALF_FLOAT_LAYOUT.items()},
 }
@@ -1248,6 +1251,28 @@ def _decode_rg8_snorm(payload: memoryview, width: int, height: int, pitch: int) 
     return bytes(rgba)
 
 
+def _decode_rg8_integer(payload: memoryview, width: int, height: int, pitch: int, fmt: str) -> bytes:
+    """Preview DXGI R8G8_UINT as bytes and R8G8_SINT by offsetting signed channels."""
+    row_bytes = width * 2
+    pitch = pitch or row_bytes
+    if pitch < row_bytes:
+        raise DdsError(f"Invalid {fmt} row pitch: {pitch} bytes (need at least {row_bytes})")
+    expected = (height - 1) * pitch + row_bytes
+    if len(payload) < expected:
+        raise DdsError(f"Truncated {fmt} payload: {len(payload)} bytes (need {expected})")
+    rgba = bytearray(width * height * 4)
+    rgba[3::4] = b"\xff" * (width * height)
+    dst = 0
+    for start in range(0, height * pitch, pitch):
+        row = payload[start:start + row_bytes]
+        signed = fmt == "RG8_SINT"
+        code = "<bb" if signed else "<BB"
+        for red, green in struct.iter_unpack(code, row):
+            rgba[dst:dst + 2] = bytes((red + 128, green + 128) if signed else (red, green))
+            dst += 4
+    return bytes(rgba)
+
+
 def _bc7_read_indices(bits: int, index_bits: int, is_anchor: tuple[int, ...]) -> tuple[list[int], int]:
     """Read 16 LSB-first pixel indices; anchor pixels omit their implicit zero MSB."""
     indices = []
@@ -1440,6 +1465,8 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
         rgba = _decode_r9g9b9e5(payload, width, height, pitch)
     elif fmt == "RG8_SNORM":
         rgba = _decode_rg8_snorm(payload, width, height, pitch)
+    elif fmt in ("RG8_UINT", "RG8_SINT"):
+        rgba = _decode_rg8_integer(payload, width, height, pitch, fmt)
     elif fmt in ("R16_UNORM", "R32_FLOAT", "A8_UNORM"):
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
     elif fmt == "R8_UNORM":
