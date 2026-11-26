@@ -19,9 +19,10 @@ and NaN map to 0. The single-channel formats fill red, with green and blue 0 and
 R16G16B16A16_FLOAT keeps its own alpha.
 R8_UINT previews preserve the byte value; R8_SINT maps its signed byte range to [0, 255].
 R8_SNORM previews map the signed value range [-1, 1] to [0, 255] in red, with opaque alpha.
-R11G11B10_FLOAT previews clamp RGB to [0, 1], map NaN to zero and use opaque alpha.
 R8G8_UINT previews use their channel bytes directly; R8G8_SINT offsets each signed channel by 128 for display.
-R8G8_SNORM previews map the signed red and green values from [-1, 1] to [0, 255]; blue is zero and alpha is opaque.
+R8G8_SNORM previews map signed red and green values from [-1, 1] to [0, 255]; blue is zero and alpha is opaque.
+R11G11B10_FLOAT and R9G9B9E5_SHAREDEXP previews clamp RGB to [0, 1] and use opaque alpha; NaN maps to zero for
+R11G11B10_FLOAT.
 
 Usage:
     python -I tools/dds_png.py <in.dds> --info
@@ -106,8 +107,7 @@ _DXGI_MAP: dict[int, str] = {
     65: "A8_UNORM",
     85: "B5G6R5_UNORM",
     86: "B5G5R5A1_UNORM",
-    85: "B5G6R5_UNORM",
-    86: "B5G5R5A1_UNORM",
+    67: "R9G9B9E5_FLOAT",
     70: "BC1",
     71: "BC1",
     72: "BC1",
@@ -385,7 +385,7 @@ class _Plane(NamedTuple):
 
 
 _TEXEL_BYTES = {
-    "RGBA8": 4, "BGRA8": 4, "BGRX8": 4, "RGBX8": 4, "R11G11B10_FLOAT": 4,
+    "RGBA8": 4, "BGRA8": 4, "BGRX8": 4, "RGBX8": 4, "R11G11B10_FLOAT": 4, "R9G9B9E5_FLOAT": 4,
     "BGR8": 3, "RGB8": 3, "B5G6R5_UNORM": 2, "B5G5R5A1_UNORM": 2,
     "R8_UNORM": 1, "R16_UNORM": 2, "R8_UINT": 1, "R8_SINT": 1, "R8_SNORM": 1,
     "RG8_UNORM": 2, "RG8_UINT": 2, "RG8_SINT": 2, "RG8_SNORM": 2, "A8_UNORM": 1,
@@ -1102,6 +1102,31 @@ def _decode_r11g11b10(payload: memoryview, width: int, height: int, pitch: int) 
     return bytes(rgba)
 
 
+def _decode_r9g9b9e5(payload: memoryview, width: int, height: int, pitch: int) -> bytes:
+    """Decode DXGI R9G9B9E5_SHAREDEXP, clamping its shared-exponent RGB values to [0, 1]."""
+    row_bytes = width * 4
+    pitch = pitch or row_bytes
+    if pitch < row_bytes:
+        raise DdsError(f"Invalid R9G9B9E5_FLOAT row pitch: {pitch} bytes (need at least {row_bytes})")
+    expected = (height - 1) * pitch + row_bytes
+    if len(payload) < expected:
+        raise DdsError(f"Truncated R9G9B9E5_FLOAT payload: {len(payload)} bytes (need {expected})")
+
+    rgba = bytearray(width * height * 4)
+    rgba[3::4] = b"\xff" * (width * height)
+    dst = 0
+    for start in range(0, height * pitch, pitch):
+        for (pixel,) in struct.iter_unpack("<I", payload[start:start + row_bytes]):
+            exponent = (pixel >> 27) & 0x1F
+            scale = exponent - 24
+            for shift in (0, 9, 18):
+                value = math.ldexp((pixel >> shift) & 0x1FF, scale)
+                rgba[dst] = 255 if value >= 1.0 else int(value * 255.0 + 0.5)
+                dst += 1
+            dst += 1
+    return bytes(rgba)
+
+
 def _decode_single_channel(payload: memoryview, width: int, height: int, pitch: int, fmt: str) -> bytes:
     """Decode red-only numeric formats and alpha-only A8_UNORM."""
     bpp = _TEXEL_BYTES[fmt]
@@ -1401,6 +1426,8 @@ def _decode_plane(data: bytes | bytearray | memoryview, plane: _Plane, info: _Dd
         rgba = _decode_rg8_integer(payload, width, height, pitch, fmt)
     elif fmt == "RG8_SNORM":
         rgba = _decode_rg8_snorm(payload, width, height, pitch)
+    elif fmt == "R9G9B9E5_FLOAT":
+        rgba = _decode_r9g9b9e5(payload, width, height, pitch)
     elif fmt in ("R8_UNORM", "R16_UNORM", "R8_UINT", "R8_SINT", "R8_SNORM", "R32_FLOAT", "A8_UNORM"):
         rgba = _decode_single_channel(payload, width, height, pitch, fmt)
     elif fmt == "BC7":
