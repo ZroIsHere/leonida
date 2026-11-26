@@ -435,7 +435,7 @@ void update(uint64_t now) {
 void trace_reading(State& s, const char* api, uint32_t kind, const Reading* reading) {
     const uint64_t query = ++s.reading_queries;
     const uint32_t buttons = reading ? reading->state().buttons : 0;
-    if (s.trace_reads && (query == 1 || buttons || query % 1000 == 0))
+    if (s.trace_reads && (query <= 128 || buttons || query % 1000 == 0))
         std::fprintf(stderr, "[rt] gameinput: %s #%llu kind=0x%08x seq=%llu buttons=0x%08x\n", api,
                      static_cast<unsigned long long>(query), kind,
                      static_cast<unsigned long long>(reading ? reading->seq() : 0), buttons);
