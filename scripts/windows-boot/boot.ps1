@@ -58,6 +58,9 @@
     No input script (LEONIDA_KEYBOARD_PAD then stays as this shell has it: LEONIDA_KEYBOARD_PAD=1 to play by
     hand with the window focused).
 
+.PARAMETER FirstRunUi
+    Show the retail first-run pages before launching the title.
+
 .PARAMETER Stacks
     LEONIDA_STACKS: whole seconds at which every thread's call chain is printed to the log, e.g. '30,60'.
 
@@ -118,6 +121,7 @@ param(
     [hashtable]$SetEnv = @{},
     [switch]$NoCapture,
     [switch]$NoInput,
+    [switch]$FirstRunUi,
     [string[]]$ExtraArgs = @(),
     [string]$Python = "",
     [int]$SummaryLines = 40,
@@ -278,7 +282,8 @@ foreach ($pair in $EnvPairs) {
 }
 if ($bootEnv["LEONIDA_CAPTURE"]) { $Capture = $bootEnv["LEONIDA_CAPTURE"] }
 
-$gameArgs = @("--run", $Exe, "--game-dir", $GameDir, "--overlay", $Overlay, "--trace", $TraceFile, "--trace-d3d12") + $ExtraArgs
+$modeArgs = if ($FirstRunUi) { @("--first-run-ui", $Exe) } else { @("--run", $Exe) }
+$gameArgs = $modeArgs + @("--game-dir", $GameDir, "--overlay", $Overlay, "--trace", $TraceFile, "--trace-d3d12") + $ExtraArgs
 $argLine = ($gameArgs | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join " "
 
 if (-not $DigestOnly) {
