@@ -74,6 +74,20 @@ class SingleChannelTests(unittest.TestCase):
         self.assertEqual(rgba[3::4], bytes([1, 2, 3, 4, 5, 6]))
         self.assertEqual(set(rgba[0::4]) | set(rgba[1::4]) | set(rgba[2::4]), {0})
 
+    def test_rgba16_snorm_maps_signed_extremes_and_zero(self):
+        payload = struct.pack("<4h", -32768, -32767, 0, 32767)
+        data = _dx10(1, 1, 13, payload)
+        self.assertEqual(dds.parse_dds_header(data)["format"], "RGBA16_SNORM")
+        self.assertEqual(dds.decode_dds(data)[2], bytes((0, 0, 128, 255)))
+
+    def test_rgba16_snorm_padded_rows_and_truncation(self):
+        payload = struct.pack("<4h", -16384, 16384, -32768, 32767) + b"pad!"
+        payload += struct.pack("<4h", 0, 0, 0, 0)
+        data = _dx10(1, 2, 13, payload, pitch=12)
+        self.assertEqual(dds.decode_dds(data)[2], bytes((64, 191, 0, 255, 128, 128, 128, 128)))
+        with self.assertRaises(dds.DdsError):
+            dds.decode_dds(_dx10(1, 1, 13, bytes(7)))
+
     def test_truncated_rejected(self):
         for dxgi, n in ((56, 7), (65, 3), (41, 15)):
             with self.assertRaises(dds.DdsError):
